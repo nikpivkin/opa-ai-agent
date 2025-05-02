@@ -1,0 +1,6 @@
+{
+    "prettier.enable": true,
+    "[svelte]": {
+        "editor.defaultFormatter": "esbenp.prettier-vscode"
+    }
+}
