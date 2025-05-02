@@ -12,6 +12,8 @@
     let apiToken: string = localStorage.getItem('openrouter_token') || '';
     $: localStorage.setItem('openrouter_token', apiToken);
     let stream: boolean = true;
+    let isGenerating = false;
+    let isEvaluating = false;
   
     function isValidJson(jsonString: string): boolean {
       try {
@@ -31,8 +33,17 @@
         jsonError = null;
       }
   
-      const policy = editorView.state.doc.toString();
-      outputResult = await evaluateRegoPolicy(policy, inputJson);
+     
+      isEvaluating = true;
+
+      try {
+        const policy = editorView.state.doc.toString();
+        outputResult = await evaluateRegoPolicy(policy, inputJson);
+      } catch (error) {
+        outputResult = `Error: ${error.message}`;
+      } finally {
+        isEvaluating = false;
+      }
     }
   
     async function evaluateRegoPolicy(policy: string, inputJson: string): Promise<string> {
@@ -44,34 +55,37 @@
         rego_version: 1,
         strict: true
       };
-  
-      try {
-        const response = await fetch('https://play.openpolicyagent.org/v1/data', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-          },
-          body: JSON.stringify(requestBody),
-        });
-  
-        const data = await response.json();
-  
-        if (data.code && data.message) {
-          return `Error: ${data.message}`;
-        }
-  
-        if (data.result && data.result.length > 0) {
-          return JSON.stringify(data.result[0].expressions[0].value, null, 2);
-        } else {
-          return 'No result returned from policy evaluation.';
-        }
-      } catch (error) {
-        return `Error: ${error.message}`;
+
+      const response = await fetch('https://play.openpolicyagent.org/v1/data', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(requestBody),
+      });
+
+      const data = await response.json();
+
+      if (data.code && data.message) {
+        return `Error: ${data.message}`;
+      }
+
+      if (data.result && data.result.length > 0) {
+        return JSON.stringify(data.result[0].expressions[0].value, null, 2);
+      } else {
+        return 'No result returned from policy evaluation.';
       }
     }
   
     async function generatePolicyHandler() {
-      generatePolicy(policyPrompt, inputJson, apiToken);
+      isGenerating = true;
+      try {
+        await generatePolicy(policyPrompt, inputJson, apiToken);
+      } catch (error) {
+        console.error("Error:", error.message)
+      } finally {
+        isGenerating = false
+      }
     }
   
     async function generatePolicy(prompt: string, inputJson: string, token: string) {
@@ -79,12 +93,12 @@
       const temperature = 0.7;
       const messages = [
         {
-            role: "system",
-            content: "You are a code generation assistant. Given a user request and input data, respond ONLY with a valid OPA Rego policy. Do NOT include any explanation, comments, or markdown formatting. Output only the Rego code."
+          role: "system",
+          content: "You are a code generation assistant. Given a user request and input data, respond ONLY with a valid OPA Rego policy. Do NOT include any explanation, comments, or markdown formatting. Output only the Rego code."
         },
         {
-        role: "user",
-        content: `Generate an OPA Rego policy for the following prompt: "${prompt}" using input: ${inputJson}. Only return valid Rego code. Do not include any explanation or formatting.`
+          role: "user",
+          content: `Generate an OPA Rego policy for the following prompt: "${prompt}" using input: ${inputJson}. Only return valid Rego code. Do not include any explanation or formatting.`
         }
       ];
   
@@ -98,91 +112,85 @@
         stream: stream,
       };
   
-      try {
-        const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-            "Authorization": `Bearer ${token}`
-          },
-          body: JSON.stringify(payload)
-        });
+      const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+          "Authorization": `Bearer ${token}`
+        },
+        body: JSON.stringify(payload)
+      });
 
-        editorView.dispatch({
-          changes: {from: 0, to: editorView.state.doc.length, insert:''}
-        })
+      editorView.dispatch({
+        changes: {from: 0, to: editorView.state.doc.length, insert:''}
+      })
 
-        if (!stream) {
-          const data = await response.json();
-  
-          if (data.choices && data.choices.length > 0) {
-            editorView.dispatch({
-              changes: {
-                from: 0,
-                to: editorView.state.doc.length,
-                insert: data.choices[0].message.content
-                }
-            });
-           return;
-          } else {
-            editorView.dispatch({
-              changes: {
-                from: 0,
-                to: editorView.state.doc.length,
-                insert: "No policy generated."
+      if (!stream) {
+        const data = await response.json();
+
+        if (data.choices && data.choices.length > 0) {
+          editorView.dispatch({
+            changes: {
+              from: 0,
+              to: editorView.state.doc.length,
+              insert: data.choices[0].message.content
               }
-            });
-            return;
-          }
+          });
+          return;
         } else {
-          // https://openrouter.ai/docs/api-reference/streaming
-          const reader = response.body?.getReader();
-          if (!reader) {
-            throw new Error('Response body is not readable');
-          }
-          const decoder = new TextDecoder();
-          let buffer = '';
-          try {
+          editorView.dispatch({
+            changes: {
+              from: 0,
+              to: editorView.state.doc.length,
+              insert: "No policy generated."
+            }
+          });
+          return;
+        }
+      } else {
+        // https://openrouter.ai/docs/api-reference/streaming
+        const reader = response.body?.getReader();
+        if (!reader) {
+          throw new Error('Response body is not readable');
+        }
+        const decoder = new TextDecoder();
+        let buffer = '';
+        try {
+          while (true) {
+            const { done, value } = await reader.read();
+            if (done) break;
+            // Append new chunk to buffer
+            buffer += decoder.decode(value, { stream: true });
+            // Process complete lines from buffer
             while (true) {
-              const { done, value } = await reader.read();
-              if (done) break;
-              // Append new chunk to buffer
-              buffer += decoder.decode(value, { stream: true });
-              // Process complete lines from buffer
-              while (true) {
-                const lineEnd = buffer.indexOf('\n');
-                if (lineEnd === -1) break;
-                const line = buffer.slice(0, lineEnd).trim();
-                buffer = buffer.slice(lineEnd + 1);
-                if (line.startsWith('data: ')) {
-                  const data = line.slice(6);
-                  if (data === '[DONE]') break;
-                  try {
-                    const parsed = JSON.parse(data);
-                    const content = parsed.choices[0].delta.content;
-                    if (content) {
-                      console.log(content);
-                      // const lines = ((content as string).match(/\n/g) || '').length
-                      editorView.dispatch({
-                        changes: {
-                          from: editorView.state.doc.length,
-                          insert: content
-                          }
-                      });
-                    }
-                  } catch (e) {
-                    // Ignore invalid JSON
-                    console.log("Invalid json:", e.message)
+              const lineEnd = buffer.indexOf('\n');
+              if (lineEnd === -1) break;
+              const line = buffer.slice(0, lineEnd).trim();
+              buffer = buffer.slice(lineEnd + 1);
+              if (line.startsWith('data: ')) {
+                const data = line.slice(6);
+                if (data === '[DONE]') break;
+                try {
+                  const parsed = JSON.parse(data);
+                  const content = parsed.choices[0].delta.content;
+                  if (content) {
+                    editorView.dispatch({
+                      changes: {
+                        from: editorView.state.doc.length,
+                        insert: content
+                        }
+                    });
                   }
+                } catch (e) {
+                  // Ignore invalid JSON
+                  console.error("Invalid json:", e.message)
                 }
               }
             }
-          } finally {
-            reader.cancel();
           }
+        } finally {
+          reader.cancel();
         }
-      } catch (error) {
-        throw new Error(`Error: ${error.message}`);
       }
     }
   
@@ -208,7 +216,13 @@ allow {
         rows="2" 
         class="prompt"
       ></textarea>
-      <button on:click={generatePolicyHandler}>Generate</button>
+      <button on:click={generatePolicyHandler} disabled={isGenerating}>
+        {#if isGenerating}
+          Generating...
+        {:else}
+          Generate
+        {/if}
+      </button>
       
       <div class="token-container">
         <label for="apiToken">OpenRouter API Token</label>
@@ -237,7 +251,13 @@ allow {
         <textarea value={outputResult} readonly rows="6"></textarea>
       </div>
   
-      <button on:click={evaluatePolicy}>Evaluate Policy</button>
+      <button on:click={evaluatePolicy} disabled={isEvaluating}>
+        {#if isEvaluating}
+          Evaluating...
+        {:else}
+          Evaluate Policy
+        {/if}
+      </button>
     </div>
   </main>
   
@@ -300,6 +320,11 @@ allow {
   
     button:hover {
       background-color: #45a049;
+    }
+
+    button:disabled {
+      background-color: #cccccc;
+      cursor: not-allowed;
     }
   
     .error {
