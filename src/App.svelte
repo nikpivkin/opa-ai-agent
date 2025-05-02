@@ -24,7 +24,7 @@
         outputResult = '';
         return;
       } else {
-        jsonError = null; 
+        jsonError = null;
       }
   
       const policy = editorView.state.doc.toString();
@@ -51,6 +51,10 @@
         });
   
         const data = await response.json();
+  
+        if (data.code && data.message) {
+          return `Error: ${data.message}`;
+        }
   
         if (data.result && data.result.length > 0) {
           return JSON.stringify(data.result[0].expressions[0].value, null, 2);
@@ -153,7 +157,6 @@ allow {
       background-color: #45a049;
     }
   
-    /* Стили для ошибок */
     .error {
       color: red;
       font-size: 14px;
