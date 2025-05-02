@@ -90,35 +90,82 @@
     }
   }
 
+  function buildChatPayload(
+    prompt: string,
+    inputJson: string,
+    stream: boolean,
+  ) {
+    return {
+      model: "mistralai/mistral-small-3.1-24b-instruct:free",
+      messages: [
+        {
+          role: "system",
+          content:
+            "You are a code generation assistant. Given a user request and input data, respond ONLY with a valid OPA Rego policy. Do NOT include any explanation, comments, or markdown formatting. Output only the Rego code.",
+        },
+        {
+          role: "user",
+          content: `Generate an OPA Rego policy for the following prompt: "${prompt}" using input: ${inputJson}. Only return valid Rego code.`,
+        },
+      ],
+      temperature: 0.7,
+      reasoning: { max_tokens: 1024 },
+      stream,
+    };
+  }
+
+  async function handleStreamResponse(
+    reader: ReadableStreamDefaultReader<Uint8Array>,
+  ) {
+    const decoder = new TextDecoder();
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+
+      while (true) {
+        const lineEnd = buffer.indexOf("\n");
+        if (lineEnd === -1) break;
+
+        const line = buffer.slice(0, lineEnd).trim();
+        buffer = buffer.slice(lineEnd + 1);
+
+        if (line.startsWith("data: ")) {
+          const data = line.slice(6);
+          if (data === "[DONE]") return;
+
+          try {
+            const parsed = JSON.parse(data);
+            const content = parsed.choices[0]?.delta?.content;
+            if (content) applyEditorContent(content);
+          } catch (e) {
+            console.error("Invalid JSON chunk:", e.message);
+          }
+        }
+      }
+    }
+
+    await reader.cancel();
+  }
+
+  function applyEditorContent(content: string) {
+    editorView.dispatch({
+      changes: {
+        from: editorView.state.doc.length,
+        insert: content,
+      },
+    });
+  }
+
   async function generatePolicy(
     prompt: string,
     inputJson: string,
     token: string,
   ) {
-    const model = "mistralai/mistral-small-3.1-24b-instruct:free";
-    const temperature = 0.7;
-    const messages = [
-      {
-        role: "system",
-        content:
-          "You are a code generation assistant. Given a user request and input data, respond ONLY with a valid OPA Rego policy. Do NOT include any explanation, comments, or markdown formatting. Output only the Rego code.",
-      },
-      {
-        role: "user",
-        content: `Generate an OPA Rego policy for the following prompt: "${prompt}" using input: ${inputJson}. Only return valid Rego code. Do not include any explanation or formatting.`,
-      },
-    ];
-
-    const payload = {
-      model,
-      messages,
-      temperature,
-      reasoning: {
-        max_tokens: 1024,
-      },
-      stream: stream,
-    };
-
+    const payload = buildChatPayload(prompt, inputJson, stream);
     const response = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -137,70 +184,13 @@
 
     if (!stream) {
       const data = await response.json();
-
-      if (data.choices && data.choices.length > 0) {
-        editorView.dispatch({
-          changes: {
-            from: 0,
-            to: editorView.state.doc.length,
-            insert: data.choices[0].message.content,
-          },
-        });
-        return;
-      } else {
-        editorView.dispatch({
-          changes: {
-            from: 0,
-            to: editorView.state.doc.length,
-            insert: "No policy generated.",
-          },
-        });
-        return;
-      }
+      const content =
+        data.choices?.[0]?.message?.content || "No policy generated.";
+      applyEditorContent(content);
     } else {
-      // https://openrouter.ai/docs/api-reference/streaming
       const reader = response.body?.getReader();
-      if (!reader) {
-        throw new Error("Response body is not readable");
-      }
-      const decoder = new TextDecoder();
-      let buffer = "";
-      try {
-        while (true) {
-          const { done, value } = await reader.read();
-          if (done) break;
-          // Append new chunk to buffer
-          buffer += decoder.decode(value, { stream: true });
-          // Process complete lines from buffer
-          while (true) {
-            const lineEnd = buffer.indexOf("\n");
-            if (lineEnd === -1) break;
-            const line = buffer.slice(0, lineEnd).trim();
-            buffer = buffer.slice(lineEnd + 1);
-            if (line.startsWith("data: ")) {
-              const data = line.slice(6);
-              if (data === "[DONE]") break;
-              try {
-                const parsed = JSON.parse(data);
-                const content = parsed.choices[0].delta.content;
-                if (content) {
-                  editorView.dispatch({
-                    changes: {
-                      from: editorView.state.doc.length,
-                      insert: content,
-                    },
-                  });
-                }
-              } catch (e) {
-                // Ignore invalid JSON
-                console.error("Invalid json:", e.message);
-              }
-            }
-          }
-        }
-      } finally {
-        reader.cancel();
-      }
+      if (!reader) throw new Error("Response body is not readable");
+      await handleStreamResponse(reader);
     }
   }
 
