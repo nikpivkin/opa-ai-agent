@@ -54,7 +54,7 @@
       rego_modules: {
         "policy.rego": policy,
       },
-      rego_version: 1,
+      rego_version: 0,
       strict: true,
     };
 
