@@ -11,6 +11,7 @@
     let policyPrompt: string = 'The policy should verify that the GET method';
     let apiToken: string = localStorage.getItem('openrouter_token') || '';
     $: localStorage.setItem('openrouter_token', apiToken);
+    let stream: boolean = true;
   
     function isValidJson(jsonString: string): boolean {
       try {
@@ -70,17 +71,10 @@
     }
   
     async function generatePolicyHandler() {
-      const policy = await generatePolicy(policyPrompt, inputJson, apiToken);
-      editorView.dispatch({
-        changes: {
-          from: 0,
-          to: editorView.state.doc.length,
-          insert: policy
-        }
-      });
+      generatePolicy(policyPrompt, inputJson, apiToken);
     }
   
-    async function generatePolicy(prompt: string, inputJson: string, token: string): Promise<string> {
+    async function generatePolicy(prompt: string, inputJson: string, token: string) {
       const model = "mistralai/mistral-small-3.1-24b-instruct:free";
       const temperature = 0.7;
       const messages = [
@@ -100,7 +94,8 @@
         temperature,
         reasoning: {
           max_tokens: 1024
-        }
+        },
+        stream: stream,
       };
   
       try {
@@ -112,16 +107,82 @@
           },
           body: JSON.stringify(payload)
         });
+
+        editorView.dispatch({
+          changes: {from: 0, to: editorView.state.doc.length, insert:''}
+        })
+
+        if (!stream) {
+          const data = await response.json();
   
-        const data = await response.json();
-  
-        if (data.choices && data.choices.length > 0) {
-          return data.choices[0].message.content;
+          if (data.choices && data.choices.length > 0) {
+            editorView.dispatch({
+              changes: {
+                from: 0,
+                to: editorView.state.doc.length,
+                insert: data.choices[0].message.content
+                }
+            });
+           return;
+          } else {
+            editorView.dispatch({
+              changes: {
+                from: 0,
+                to: editorView.state.doc.length,
+                insert: "No policy generated."
+              }
+            });
+            return;
+          }
         } else {
-          return "No policy generated.";
+          // https://openrouter.ai/docs/api-reference/streaming
+          const reader = response.body?.getReader();
+          if (!reader) {
+            throw new Error('Response body is not readable');
+          }
+          const decoder = new TextDecoder();
+          let buffer = '';
+          try {
+            while (true) {
+              const { done, value } = await reader.read();
+              if (done) break;
+              // Append new chunk to buffer
+              buffer += decoder.decode(value, { stream: true });
+              // Process complete lines from buffer
+              while (true) {
+                const lineEnd = buffer.indexOf('\n');
+                if (lineEnd === -1) break;
+                const line = buffer.slice(0, lineEnd).trim();
+                buffer = buffer.slice(lineEnd + 1);
+                if (line.startsWith('data: ')) {
+                  const data = line.slice(6);
+                  if (data === '[DONE]') break;
+                  try {
+                    const parsed = JSON.parse(data);
+                    const content = parsed.choices[0].delta.content;
+                    if (content) {
+                      console.log(content);
+                      // const lines = ((content as string).match(/\n/g) || '').length
+                      editorView.dispatch({
+                        changes: {
+                          from: editorView.state.doc.length,
+                          insert: content
+                          }
+                      });
+                    }
+                  } catch (e) {
+                    // Ignore invalid JSON
+                    console.log("Invalid json:", e.message)
+                  }
+                }
+              }
+            }
+          } finally {
+            reader.cancel();
+          }
         }
       } catch (error) {
-        return `Error: ${error.message}`;
+        throw new Error(`Error: ${error.message}`);
       }
     }
   
