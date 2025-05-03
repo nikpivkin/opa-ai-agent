@@ -14,6 +14,8 @@
   let stream: boolean = true;
   let isGenerating = false;
   let isEvaluating = false;
+  let stopGeneration = false;
+  let maxAttempts = 10;
 
   function isValidJson(jsonString: string): boolean {
     try {
@@ -24,20 +26,45 @@
     }
   }
 
-  async function evaluatePolicy() {
+  function validateInput(): boolean {
     if (!isValidJson(inputJson)) {
       jsonError = "Invalid JSON format!";
       outputResult = "";
-      return;
+      return false;
     } else {
       jsonError = null;
+      return true;
+    }
+  }
+
+  function showOutputFromRego(data: any) {
+    if (data.result && data.result.length > 0) {
+      outputResult = JSON.stringify(
+        data.result[0].expressions[0].value,
+        null,
+        2,
+      );
+    } else {
+      outputResult = "No result returned from policy evaluation.";
+    }
+  }
+
+  async function evaluatePolicy() {
+    if (!validateInput()) {
+      return;
     }
 
     isEvaluating = true;
 
     try {
       const policy = editorView.state.doc.toString();
-      outputResult = await evaluateRegoPolicy(policy, inputJson);
+      const data = await evaluateRegoPolicy(policy, inputJson);
+      if (data.code && data.message) {
+        return `Error: ${data.message}`;
+      }
+
+      showOutputFromRego(data);
+      return;
     } catch (error) {
       outputResult = `Error: ${error.message}`;
     } finally {
@@ -48,7 +75,7 @@
   async function evaluateRegoPolicy(
     policy: string,
     inputJson: string,
-  ): Promise<string> {
+  ): Promise<any> {
     const requestBody = {
       input: JSON.parse(inputJson),
       rego_modules: {
@@ -67,24 +94,56 @@
     });
 
     const data = await response.json();
+    return data;
+  }
 
-    if (data.code && data.message) {
-      return `Error: ${data.message}`;
+  async function tryGeneratePolicy(
+    attempt: number,
+    prevError?: string,
+  ): Promise<any> {
+    if (attempt === 0) {
+      throw new Error("The limit of generation attempts has been reached.");
     }
-
-    if (data.result && data.result.length > 0) {
-      return JSON.stringify(data.result[0].expressions[0].value, null, 2);
-    } else {
-      return "No result returned from policy evaluation.";
+    await generatePolicy(policyPrompt, inputJson, apiToken, prevError);
+    const policy = editorView.state.doc.toString();
+    isEvaluating = true;
+    try {
+      const data = await evaluateRegoPolicy(policy, inputJson);
+      if (data.code && data.message) {
+        console.error("Error:", data.message);
+        if (stopGeneration) {
+          stopGeneration = false;
+          outputResult = `Error: ${data.message}`;
+          return;
+        }
+        const d = await tryGeneratePolicy(attempt - 1, data.message);
+        return d;
+      } else {
+        return data;
+      }
+    } finally {
+      isEvaluating = false;
     }
   }
 
   async function generatePolicyHandler() {
+    if (isGenerating) {
+      stopGeneration = true;
+      return;
+    }
     isGenerating = true;
     try {
-      await generatePolicy(policyPrompt, inputJson, apiToken);
+      if (!validateInput()) {
+        return;
+      }
+      const data = await tryGeneratePolicy(maxAttempts);
+      if (data) {
+        showOutputFromRego(data);
+      }
+      return;
     } catch (error) {
       console.error("Error:", error.message);
+      outputResult = error.message;
     } finally {
       isGenerating = false;
     }
@@ -94,18 +153,23 @@
     prompt: string,
     inputJson: string,
     stream: boolean,
+    prevError?: string,
   ) {
+    let userMessage = `Generate an OPA Rego policy for the following prompt: "${prompt}" using input: ${inputJson}. Only return valid Rego code.`;
+    if (prevError) {
+      userMessage += `An error in previous policy evaluation: "${prevError}""`;
+    }
     return {
       model: "mistralai/mistral-small-3.1-24b-instruct:free",
       messages: [
         {
           role: "system",
           content:
-            "You are a code generation assistant. Given a user request and input data, respond ONLY with a valid OPA Rego policy. Do NOT include any explanation, comments, or markdown formatting. Output only the Rego code.",
+            "You are a code generation assistant. Given a user request and input data, respond ONLY with a valid OPA Rego policy. Do NOT include any explanation, comments, or markdown formatting. Output only the Rego code. The request may contain an error from a previous policy evaluation. You must take it into account.",
         },
         {
           role: "user",
-          content: `Generate an OPA Rego policy for the following prompt: "${prompt}" using input: ${inputJson}. Only return valid Rego code.`,
+          content: userMessage,
         },
       ],
       temperature: 0.7,
@@ -164,8 +228,9 @@
     prompt: string,
     inputJson: string,
     token: string,
+    prevError?: string,
   ) {
-    const payload = buildChatPayload(prompt, inputJson, stream);
+    const payload = buildChatPayload(prompt, inputJson, stream, prevError);
     const response = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -217,9 +282,9 @@ allow {
       rows="2"
       class="prompt"
     ></textarea>
-    <button on:click={generatePolicyHandler} disabled={isGenerating}>
+    <button on:click={generatePolicyHandler}>
       {#if isGenerating}
-        Generating...
+        Stop generation
       {:else}
         Generate
       {/if}
