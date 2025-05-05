@@ -16,6 +16,7 @@
   let isEvaluating = false;
   let stopGeneration = false;
   let maxAttempts = 10;
+  let abortController: AbortController | null = null;
 
   function isValidJson(jsonString: string): boolean {
     try {
@@ -99,12 +100,13 @@
 
   async function tryGeneratePolicy(
     attempt: number,
+    signal: AbortSignal,
     prevError?: string,
   ): Promise<any> {
     if (attempt === 0) {
       throw new Error("The limit of generation attempts has been reached.");
     }
-    await generatePolicy(policyPrompt, inputJson, apiToken, prevError);
+    await generatePolicy(policyPrompt, inputJson, apiToken, signal, prevError);
     const policy = editorView.state.doc.toString();
     isEvaluating = true;
     try {
@@ -116,7 +118,7 @@
           outputResult = `Error: ${data.message}`;
           return;
         }
-        const d = await tryGeneratePolicy(attempt - 1, data.message);
+        const d = await tryGeneratePolicy(attempt - 1, signal, data.message);
         return d;
       } else {
         return data;
@@ -129,23 +131,36 @@
   async function generatePolicyHandler() {
     if (isGenerating) {
       stopGeneration = true;
+      abortController?.abort();
+      abortController = null;
       return;
     }
+    
     isGenerating = true;
+    stopGeneration = false;
+
+    abortController = new AbortController();
+    const signal = abortController.signal;
+
     try {
       if (!validateInput()) {
         return;
       }
-      const data = await tryGeneratePolicy(maxAttempts);
+      const data = await tryGeneratePolicy(maxAttempts, signal);
       if (data) {
         showOutputFromRego(data);
       }
       return;
     } catch (error) {
-      console.error("Error:", error.message);
-      outputResult = error.message;
+      if (error.name === 'AbortError') {
+        console.log('Stream cancelled');
+      } else {
+        console.error("Error:", error.message);
+        outputResult = error.message;
+      }
     } finally {
       isGenerating = false;
+      abortController = null;
     }
   }
 
@@ -228,6 +243,7 @@
     prompt: string,
     inputJson: string,
     token: string,
+    signal: AbortSignal,
     prevError?: string,
   ) {
     const payload = buildChatPayload(prompt, inputJson, stream, prevError);
@@ -240,6 +256,7 @@
           Authorization: `Bearer ${token}`,
         },
         body: JSON.stringify(payload),
+        signal: signal,
       },
     );
 
