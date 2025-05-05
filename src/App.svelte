@@ -5,10 +5,15 @@
   let editorContainer: HTMLDivElement;
   let editorView: EditorView;
 
-  let inputJson: string = '{"method": "GET"}';
+  let inputJson: string =
+    localStorage.getItem("input_json") || '{"method": "GET"}';
+  $: localStorage.setItem("input_json", inputJson);
   let outputResult: string = "";
   let jsonError: string | null = null;
-  let policyPrompt: string = "The policy should verify that the GET method";
+  let policyPrompt: string =
+    localStorage.getItem("policy_prompt") ||
+    "The policy should verify that the GET method";
+  $: localStorage.setItem("policy_prompt", policyPrompt);
   let apiToken: string = localStorage.getItem("openrouter_token") || "";
   $: localStorage.setItem("openrouter_token", apiToken);
   let stream: boolean = true;
@@ -135,7 +140,7 @@
       abortController = null;
       return;
     }
-    
+
     isGenerating = true;
     stopGeneration = false;
 
@@ -152,8 +157,8 @@
       }
       return;
     } catch (error) {
-      if (error.name === 'AbortError') {
-        console.log('Stream cancelled');
+      if (error.name === "AbortError") {
+        console.log("Stream cancelled");
       } else {
         console.error("Error:", error.message);
         outputResult = error.message;
