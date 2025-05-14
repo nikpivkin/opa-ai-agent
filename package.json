@@ -11,16 +11,24 @@
   },
   "devDependencies": {
     "@sveltejs/vite-plugin-svelte": "^5.0.3",
+    "@tailwindcss/vite": "^4.1.5",
     "@tsconfig/svelte": "^5.0.4",
+    "flowbite": "^3.1.2",
+    "flowbite-svelte": "1.0.0-next.20",
     "prettier": "^3.5.3",
     "prettier-plugin-svelte": "^3.3.3",
     "svelte": "^5.23.1",
     "svelte-check": "^4.1.5",
+    "tailwindcss": "^4.1.5",
     "typescript": "~5.7.2",
     "vite": "^6.3.1"
   },
   "packageManager": "pnpm@10.8.0+sha512.0e82714d1b5b43c74610193cb20734897c1d00de89d0e18420aebc5977fa13d780a9cb05734624e81ebd81cc876cd464794850641c48b9544326b5622ca29971",
   "dependencies": {
-    "codemirror": "^6.0.1"
+    "@codemirror/lang-json": "^6.0.1",
+    "@codemirror/state": "^6.5.2",
+    "@codemirror/view": "^6.36.8",
+    "codemirror": "^6.0.1",
+    "paneforge": "1.0.0-next.5"
   }
 }
