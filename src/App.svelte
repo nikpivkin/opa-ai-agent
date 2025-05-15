@@ -21,7 +21,11 @@
   import CollapsablePane from "./lib/components/CollapsablePane.svelte";
 
   import type { Message } from "./lib/types/chat";
-  import { chatSessions, currentSessionId } from "./stores/chat";
+  import {
+    chatSessions,
+    currentSessionId,
+    switchToNewChat,
+  } from "./stores/chat";
 
   let editorContainer: HTMLDivElement;
   let editorView: EditorView;
@@ -154,6 +158,11 @@
 
     const data = await response.json();
     return data;
+  }
+
+  function deleteChatHandler() {
+    delete $chatSessions[$currentSessionId];
+    switchToNewChat();
   }
 
   async function tryGeneratePolicy(
@@ -455,7 +464,7 @@ allow {
 
 <main class="h-screen w-full">
   <PaneGroup direction="horizontal" class="h-screen w-full">
-    <Pane defaultSize={70} class="flex flex-col p-4"
+    <Pane defaultSize={70} class="flex flex-col"
       ><div class="flex flex-row justify-between justify-items-center">
         <ToolbarButton
           class="text-primary-600 dark:text-primary-500 rounded-full items-center content-center"
@@ -488,11 +497,16 @@ allow {
               bind:value={apiToken}
             />
           </div>
+          {#snippet footer()}
+            <Button color="red" class="me-2" onclick={deleteChatHandler}
+              >Delete chat</Button
+            >
+          {/snippet}
         </Modal>
       </div>
 
       <PaneGroup direction="horizontal">
-        <Pane class="p-2">
+        <Pane minSize={20} class="p-2">
           <h3 class="text-base font-semibold">CHAT</h3>
           <div class="mt-2 h-[500px] overflow-y-auto space-y-2 pr-1">
             {#each currentChatSession.messages.filter((m) => m.role != "system") as message}
@@ -506,13 +520,13 @@ allow {
         <PaneResizer
           class="relative w-1 items-center justify-center bg-gray-200"
         />
-        <Pane>
+        <Pane minSize={20}>
           <h3 class="text-base font-semibold pl-2">EDITOR</h3>
           <div bind:this={editorContainer} class="h-full"></div>
         </Pane>
       </PaneGroup>
 
-      <form class="pl-[25px]">
+      <form>
         <label for="chat" class="sr-only">Describe your desired policy</label>
         <div
           class="flex items-center px-3 py-2 dark:bg-gray-700 border-2 border-gray-300"

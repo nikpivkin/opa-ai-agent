@@ -15,13 +15,26 @@ type Sessions = {
 
 export let currentSessionId = writable(DEFAULT_SESSION_ID);
 
+function defaultChat(): ChatSession {
+  return {
+    id: DEFAULT_SESSION_ID,
+    title: "New conversation",
+    messages: [],
+  };
+}
+
+export function switchToNewChat() {
+  const id = crypto.randomUUID();
+  chatSessions.update((sessions) => {
+    sessions[id] = defaultChat();
+    return sessions;
+  });
+  currentSessionId.set(id);
+}
+
 export let chatSessions = persist(
   writable<Sessions>({
-    [DEFAULT_SESSION_ID]: {
-      id: DEFAULT_SESSION_ID,
-      title: "New conversation",
-      messages: [],
-    },
+    [DEFAULT_SESSION_ID]: defaultChat(),
   }),
   createIndexedDBStorage(),
   CHAT_SESSIONS_KEY,
