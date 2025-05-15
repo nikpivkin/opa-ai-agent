@@ -1,4 +1,5 @@
 <script lang="ts">
+  import ChatMessage from "./lib/components/ChatMessage.svelte";
   import { onMount } from "svelte";
   import { EditorState } from "@codemirror/state";
   import { EditorView } from "@codemirror/view";
@@ -188,7 +189,9 @@
         return data;
       }
     } catch (error) {
-      throw new Error("Failed to generate or eval policy: " + error.message, { cause: error });
+      throw new Error("Failed to generate or eval policy: " + error.message, {
+        cause: error,
+      });
     } finally {
       isEvaluating = false;
     }
@@ -454,7 +457,6 @@ allow {
   <PaneGroup direction="horizontal" class="h-screen w-full">
     <Pane defaultSize={70} class="flex flex-col p-4"
       ><div class="flex flex-row justify-between justify-items-center">
-        <h1 class="content-center text-xl">Policy Editor</h1>
         <ToolbarButton
           class="text-primary-600 dark:text-primary-500 rounded-full items-center content-center"
           onclick={() => (settingstModal = true)}
@@ -489,7 +491,26 @@ allow {
         </Modal>
       </div>
 
-      <div bind:this={editorContainer} class="h-full"></div>
+      <PaneGroup direction="horizontal">
+        <Pane class="p-2">
+          <h3 class="text-base font-semibold">CHAT</h3>
+          <div class="mt-2 h-[500px] overflow-y-auto space-y-2 pr-1">
+            {#each currentChatSession.messages.filter((m) => m.role != "system") as message}
+              <ChatMessage
+                content={message.content}
+                side={message.role == "assistant" ? "left" : "right"}
+              />
+            {/each}
+          </div>
+        </Pane>
+        <PaneResizer
+          class="relative w-1 items-center justify-center bg-gray-200"
+        />
+        <Pane>
+          <h3 class="text-base font-semibold pl-2">EDITOR</h3>
+          <div bind:this={editorContainer} class="h-full"></div>
+        </Pane>
+      </PaneGroup>
 
       <form class="pl-[25px]">
         <label for="chat" class="sr-only">Describe your desired policy</label>
@@ -504,14 +525,10 @@ allow {
             bind:value={policyPrompt}
           />
           <ButtonGroup class="*:ring-primary-700!">
-            <Button onclick={generatePolicyHandler} disabled={isGenerating}>
+            <Button onclick={generatePolicyHandler}>
               {#if isGenerating}
-                <!-- <StopSolid class="h-6 w-6" />
-                <span class="sr-only">Stop generating</span> -->
-                <Spinner class="me-3" size="4" /> Generating...
+                <Spinner class="me-3" size="4" /> Stop generating...
               {:else}
-                <!-- <PaperPlaneOutline class="h-6 w-6 rotate-45" />
-                <span class="sr-only">Send prompt</span> -->
                 Generate
               {/if}
             </Button>
