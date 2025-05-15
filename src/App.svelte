@@ -31,6 +31,13 @@
   let schemaContainer: HTMLDivElement;
   let schemaView: EditorView;
 
+  type Message = {
+    role: "system" | "user";
+    content: string;
+  };
+
+  let currentMessages = $state<Message[]>([]);
+
   let inputJson: string =
     localStorage.getItem("input_json") || '{"method": "GET"}';
   $effect(() => {
@@ -222,24 +229,44 @@
     }
   }
 
+  type ChatPayload = {
+    model: string;
+    messages: Message[];
+    temperature: number;
+    reasoning: { max_tokens: number };
+    stream: boolean;
+  };
+
   function buildChatPayload(
     prompt: string,
     inputJson: string,
     stream: boolean,
+    messages: Message[],
     prevError?: string,
-  ) {
+  ): ChatPayload {
     let userMessage = `Generate an OPA Rego policy for the following prompt: "${prompt}" using input: ${inputJson}. Only return valid Rego code.`;
     if (prevError) {
       userMessage += `An error in previous policy evaluation: "${prevError}""`;
     }
-    return {
-      model: "mistralai/mistral-small-3.1-24b-instruct:free",
-      messages: [
+
+    let payloadMessages: Message[] = [];
+
+    if (messages.length === 0) {
+      payloadMessages = [
         {
           role: "system",
           content:
             "You are a code generation assistant. Given a user request and input data, respond ONLY with a valid OPA Rego policy. Do NOT include any explanation, comments, or markdown formatting. Output only the Rego code. The request may contain an error from a previous policy evaluation. You must take it into account.",
         },
+      ];
+    } else {
+      payloadMessages = messages;
+    }
+
+    return {
+      model: "mistralai/mistral-small-3.1-24b-instruct:free",
+      messages: [
+        ...payloadMessages,
         {
           role: "user",
           content: userMessage,
@@ -253,9 +280,11 @@
 
   async function handleStreamResponse(
     reader: ReadableStreamDefaultReader<Uint8Array>,
-  ) {
+  ): Promise<string> {
     const decoder = new TextDecoder();
     let buffer = "";
+
+    let allContent = "";
 
     while (true) {
       const { done, value } = await reader.read();
@@ -272,12 +301,15 @@
 
         if (line.startsWith("data: ")) {
           const data = line.slice(6);
-          if (data === "[DONE]") return;
+          if (data === "[DONE]") return allContent;
 
           try {
             const parsed = JSON.parse(data);
             const content = parsed.choices[0]?.delta?.content;
-            if (content) applyEditorContent(content);
+            if (content) {
+              applyEditorContent(content);
+              allContent += content;
+            }
           } catch (e) {
             if (e instanceof Error) {
               console.error("Invalid JSON chunk:", e.message);
@@ -290,6 +322,7 @@
     }
 
     await reader.cancel();
+    return allContent;
   }
 
   function applyEditorContent(content: string) {
@@ -308,7 +341,14 @@
     signal: AbortSignal,
     prevError?: string,
   ) {
-    const payload = buildChatPayload(prompt, inputJson, stream, prevError);
+    const payload = buildChatPayload(
+      prompt,
+      inputJson,
+      stream,
+      currentMessages,
+      prevError,
+    );
+    currentMessages = [...currentMessages, ...payload.messages];
     const response = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -326,16 +366,32 @@
       changes: { from: 0, to: editorView.state.doc.length, insert: "" },
     });
 
+    let content = "";
+
     if (!stream) {
       const data = await response.json();
-      const content =
-        data.choices?.[0]?.message?.content || "No policy generated.";
+      content = data.choices?.[0]?.message?.content || "No policy generated.";
       applyEditorContent(content);
+      currentMessages = [
+        ...currentMessages,
+        {
+          role: "system",
+          content: content,
+        },
+      ];
     } else {
       const reader = response.body?.getReader();
       if (!reader) throw new Error("Response body is not readable");
-      await handleStreamResponse(reader);
+      content = await handleStreamResponse(reader);
     }
+
+    currentMessages = [
+      ...currentMessages,
+      {
+        role: "system",
+        content: content,
+      },
+    ];
   }
 
   onMount(() => {
