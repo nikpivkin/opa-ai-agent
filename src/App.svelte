@@ -163,10 +163,17 @@
     if (attempt === 0) {
       throw new Error("The limit of generation attempts has been reached.");
     }
-    await generatePolicy(policyPrompt, inputJson, apiToken, signal, prevError);
-    const policy = editorView.state.doc.toString();
-    isEvaluating = true;
+
     try {
+      await generatePolicy(
+        policyPrompt,
+        inputJson,
+        apiToken,
+        signal,
+        prevError,
+      );
+      const policy = editorView.state.doc.toString();
+      isEvaluating = true;
       const data = await evaluateRegoPolicy(policy, inputJson);
       if (data.code && data.message) {
         console.error("Error:", data.message);
@@ -180,6 +187,8 @@
       } else {
         return data;
       }
+    } catch (error) {
+      throw new Error("Failed to generate or eval policy: " + error.message, { cause: error });
     } finally {
       isEvaluating = false;
     }
@@ -299,18 +308,25 @@
           const data = line.slice(6);
           if (data === "[DONE]") return allContent;
 
+          let parsed: any;
           try {
-            const parsed = JSON.parse(data);
-            const content = parsed.choices[0]?.delta?.content;
-            if (content) {
-              applyEditorContent(content);
-              allContent += content;
-            }
+            parsed = JSON.parse(data);
           } catch (e) {
             if (e instanceof Error) {
               console.error("Invalid JSON chunk:", e.message);
             } else {
               console.error(e);
+            }
+          }
+
+          if (parsed) {
+            if (parsed.error) {
+              throw new Error(parsed.error.message);
+            }
+            const content = parsed.choices[0]?.delta?.content;
+            if (content) {
+              applyEditorContent(content);
+              allContent += content;
             }
           }
         }
