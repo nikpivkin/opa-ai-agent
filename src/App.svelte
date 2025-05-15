@@ -6,8 +6,6 @@
   import { json } from "@codemirror/lang-json";
   import { PaneGroup, Pane, PaneResizer } from "paneforge";
 
-  import CollapsablePane from "./lib/CollapsablePane.svelte";
-
   import {
     Textarea,
     Spinner,
@@ -18,6 +16,11 @@
     Input,
     Label,
   } from "flowbite-svelte";
+
+  import CollapsablePane from "./lib/components/CollapsablePane.svelte";
+
+  import type { Message } from "./lib/types/chat";
+  import { chatSessions, currentSessionId } from "./stores/chat";
 
   let editorContainer: HTMLDivElement;
   let editorView: EditorView;
@@ -31,12 +34,7 @@
   let schemaContainer: HTMLDivElement;
   let schemaView: EditorView;
 
-  type Message = {
-    role: "system" | "user";
-    content: string;
-  };
-
-  let currentMessages = $state<Message[]>([]);
+  let currentChatSession = $derived($chatSessions[$currentSessionId] || {});
 
   let inputJson: string =
     localStorage.getItem("input_json") || '{"method": "GET"}';
@@ -46,11 +44,9 @@
   let outputResult: string = $state("");
   $effect(() => {
     const val = outputResult;
+
     outputView?.dispatch({
-      changes: {
-        from: 0,
-        insert: val,
-      },
+      changes: { from: 0, to: outputView.state.doc.length, insert: val },
     });
   });
   let jsonError: string | null = $state(null);
@@ -246,12 +242,12 @@
   ): ChatPayload {
     let userMessage = `Generate an OPA Rego policy for the following prompt: "${prompt}" using input: ${inputJson}. Only return valid Rego code.`;
     if (prevError) {
-      userMessage += `An error in previous policy evaluation: "${prevError}""`;
+      userMessage += ` An error in previous policy evaluation: "${prevError}""`;
     }
 
     let payloadMessages: Message[] = [];
 
-    if (messages.length === 0) {
+    if (!messages || messages.length === 0) {
       payloadMessages = [
         {
           role: "system",
@@ -341,14 +337,23 @@
     signal: AbortSignal,
     prevError?: string,
   ) {
+    const sessionId = $currentSessionId;
     const payload = buildChatPayload(
       prompt,
       inputJson,
       stream,
-      currentMessages,
+      currentChatSession.messages,
       prevError,
     );
-    currentMessages = [...currentMessages, ...payload.messages];
+
+    $chatSessions = {
+      ...$chatSessions,
+      [sessionId]: {
+        ...currentChatSession,
+        messages: [...payload.messages],
+      },
+    };
+
     const response = await fetch(
       "https://openrouter.ai/api/v1/chat/completions",
       {
@@ -372,26 +377,25 @@
       const data = await response.json();
       content = data.choices?.[0]?.message?.content || "No policy generated.";
       applyEditorContent(content);
-      currentMessages = [
-        ...currentMessages,
-        {
-          role: "system",
-          content: content,
-        },
-      ];
     } else {
       const reader = response.body?.getReader();
       if (!reader) throw new Error("Response body is not readable");
       content = await handleStreamResponse(reader);
     }
 
-    currentMessages = [
-      ...currentMessages,
-      {
-        role: "system",
-        content: content,
+    $chatSessions = {
+      ...$chatSessions,
+      [sessionId]: {
+        ...currentChatSession,
+        messages: [
+          ...currentChatSession.messages,
+          {
+            role: "assistant",
+            content: content,
+          },
+        ],
       },
-    ];
+    };
   }
 
   onMount(() => {
